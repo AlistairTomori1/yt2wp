@@ -45,13 +45,20 @@ jobs:
         run: |
           python -m pip install -U pip wheel
           python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
-
+           
+      - name: Write YouTube cookies to file
+        run: |
+          printf "%s" "$YT_COOKIES" > cookies.txt
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          
       - name: "Publish newest videos (full pipeline: screenshots + Whisper fallback)"
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+          YT_COOKIES_FILE: cookies.txt 
         run: |
           python batch_publish.py "$CHANNEL_URL" \
             --max 1 \
