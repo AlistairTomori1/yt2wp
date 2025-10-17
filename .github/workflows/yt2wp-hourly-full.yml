@@ -1,0 +1,60 @@
+name: yt2wp-hourly-full
+on:
+  schedule:
+    - cron: '17 * * * *'   # every hour at :17 UTC
+  workflow_dispatch: {}     # allow manual runs
+
+concurrency:
+  group: yt2wp-hourly-full
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache faster-whisper models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ctranslate2
+          key: ${{ runner.os }}-ctranslate2-tiny
+          restore-keys: |
+            ${{ runner.os }}-ctranslate2-
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip wheel
+          python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
+
+      - name: Publish newest videos (full pipeline: screenshots + Whisper fallback)
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+        run: |
+          python batch_publish.py "$CHANNEL_URL" \
+            --max 1 \
+            --wp-status publish \
+            --skip-duplicates \
+            --sleep 6
