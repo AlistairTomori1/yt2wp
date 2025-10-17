@@ -31,9 +31,9 @@ def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> 
         "noprogress": True,
         "skip_download": True,
         "extract_flat": True, 
-        _yt_base_opts(skip_download=True)
         # don't resolve every entry fully; we just need URLs/IDs
     }
+    opts = _yt_base_opts(skip_download=True)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
     entries = info.get("entries") or []
