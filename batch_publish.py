@@ -5,6 +5,10 @@ from typing import List, Dict, Any, Optional
 from yt_dlp import YoutubeDL
 import requests
 
+cookies_file = os.getenv("YT_COOKIES_FILE")
+if cookies_file and os.path.exists(cookies_file):
+    opts["cookiefile"] = cookies_file
+
 PROGRESS_FILE = "batch_progress.json"
 
 def simple_slugify(text: str) -> str:
@@ -26,7 +30,9 @@ def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> 
         "quiet": True,
         "noprogress": True,
         "skip_download": True,
-        "extract_flat": True,   # don't resolve every entry fully; we just need URLs/IDs
+        "extract_flat": True, 
+        _yt_base_opts(skip_download=True)
+        # don't resolve every entry fully; we just need URLs/IDs
     }
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
