@@ -21,6 +21,25 @@ from youtube_transcript_api import (
 
 # ---------- small helpers ----------
 
+def _yt_base_opts(skip_download=True):
+    opts = {
+        "quiet": True,
+        "noprogress": True,
+        "skip_download": skip_download,
+        # stick to stable clients to avoid SABR/PO experiments
+        "extractor_args": {"youtube": {"player_client": ["android,web_safari,web_embedded,default"]}},
+        "retries": 10,
+    }
+    cookies_file = os.getenv("YT_COOKIES_FILE")
+    if cookies_file and os.path.exists(cookies_file):
+        opts["cookiefile"] = cookies_file
+    else:
+        # local fallback (works on your Mac runs)
+        browser = os.getenv("YT_COOKIES_BROWSER")
+        if browser in ("safari", "chrome", "firefox", "edge"):
+            opts["cookiesfrombrowser"] = (browser, None, None, None)
+    return opts
+
 def hhmmss(seconds: float) -> str:
     seconds = int(round(seconds))
     h = seconds // 3600
@@ -89,7 +108,7 @@ def parse_vtt(vtt_text: str) -> List[dict]:
 # ---------- YouTube info + caption paths ----------
 
 def fetch_video_id_and_title(url: str) -> Tuple[str, str, str]:
-    opts = {"quiet": True, "noprogress": True, "skip_download": True}
+    opts = _yt_base_opts(skip_download=True)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return info["id"], info.get("title", ""), info.get("description", "") or ""
@@ -191,7 +210,7 @@ def try_ytdlp_captions(url: str, preferred_langs: List[str]) -> Optional[List[di
     Pull caption file URLs via yt-dlp (no media download), fetch the text, parse to segments.
     Returns segments or None.
     """
-    opts = {"quiet": True, "noprogress": True, "skip_download": True}
+    opts = _yt_base_opts(skip_download=True)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -451,9 +470,11 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         "fragment_retries": 10,
         "concurrent_fragment_downloads": 1,
     }
-
-    # Optional: pass cookies from your browser if available (helps unlock more formats)
-    browser = os.getenv("YT_COOKIES_BROWSER")  # safari | chrome | firefox | edge
+cookies_file = os.getenv("YT_COOKIES_FILE")
+if cookies_file and os.path.exists(cookies_file):
+    opts["cookiefile"] = cookies_file
+else:
+    browser = os.getenv("YT_COOKIES_BROWSER")
     if browser in ("safari", "chrome", "firefox", "edge"):
         opts["cookiesfrombrowser"] = (browser, None, None, None)
 
