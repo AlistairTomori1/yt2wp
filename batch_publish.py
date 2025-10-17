@@ -5,12 +5,37 @@ from typing import List, Dict, Any, Optional
 from yt_dlp import YoutubeDL
 import requests
 
-cookies_file = os.getenv("YT_COOKIES_FILE")
-if cookies_file and os.path.exists(cookies_file):
-    opts["cookiefile"] = cookies_file
-
 PROGRESS_FILE = "batch_progress.json"
 
+# ---------- yt-dlp base options (cookies + stable clients) ----------
+def _yt_base_opts(skip_download: bool = True, extract_flat: bool = False) -> dict:
+    """
+    Shared yt-dlp options: quiet, cookies, stable clients, retries.
+    If extract_flat=True, don't fully resolve each playlist item (faster for channel listings).
+    """
+    opts: Dict[str, Any] = {
+        "quiet": True,
+        "noprogress": True,
+        "skip_download": skip_download,
+        "retries": 10,
+        "extractor_args": {"youtube": {"player_client": ["android,web_safari,web_embedded,default"]}},
+    }
+    if extract_flat:
+        # Faster listing for channels/playlists; yields 'entries' with URL/ID
+        opts["extract_flat"] = "in_playlist"
+
+    cookies_file = os.getenv("YT_COOKIES_FILE")
+    if cookies_file and os.path.exists(cookies_file):
+        opts["cookiefile"] = cookies_file
+    else:
+        # Local convenience (Mac): use a logged-in browser’s cookies if set
+        browser = os.getenv("YT_COOKIES_BROWSER")
+        if browser in ("safari", "chrome", "firefox", "edge"):
+            opts["cookiesfrombrowser"] = (browser, None, None, None)
+
+    return opts
+
+# ---------- helpers ----------
 def simple_slugify(text: str) -> str:
     text = text.strip().lower()
     text = re.sub(r"['’]", "", text)
@@ -21,26 +46,21 @@ def simple_slugify(text: str) -> str:
 def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> List[str]:
     """
     Returns a list of canonical video URLs from a channel or playlist page.
-    Works with:
       - https://www.youtube.com/@handle/videos
       - https://www.youtube.com/channel/UCxxxx/videos
       - Uploads playlists, normal playlists, etc.
     """
-    opts = {
-        "quiet": True,
-        "noprogress": True,
-        "skip_download": True,
-        "extract_flat": True, 
-        # don't resolve every entry fully; we just need URLs/IDs
-    }
-    opts = _yt_base_opts(skip_download=True)
+    opts = _yt_base_opts(skip_download=True, extract_flat=True)
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
+    if not isinstance(info, dict):
+        return []
+
     entries = info.get("entries") or []
     urls: List[str] = []
     for e in entries:
-        # Prefer webpage_url; fallback to id
-        u = e.get("url") or e.get("webpage_url") or e.get("id")
+        # Prefer 'url' (flat), then 'webpage_url', then 'id'
+        u = (e.get("url") or e.get("webpage_url") or e.get("id") or "").strip()
         if not u:
             continue
         if not u.startswith("http"):
@@ -80,14 +100,13 @@ def run_one(url: str, args, progress) -> bool:
     Calls get_transcript.py with your desired flags.
     Returns True on success. Records status in progress dict.
     """
-    # Run your script once to resolve the title (for slug duplicate check)
-    # We’ll call yt-dlp quickly to grab just the title.
+    # Quick title fetch (with cookies) for duplicate detection
+    title = ""
     try:
-        with YoutubeDL({"quiet": True, "skip_download": True, "noprogress": True}) as ydl:
+        with YoutubeDL(_yt_base_opts(skip_download=True)) as ydl:
             info = ydl.extract_info(url, download=False)
         title = (info.get("title") or "").strip()
     except Exception as e:
-        title = ""
         print(f"[warn] Could not prefetch title: {e}")
 
     # Duplicate skip (optional but recommended)
@@ -107,18 +126,17 @@ def run_one(url: str, args, progress) -> bool:
         "--image-quality", str(args.image_quality),
         "--featured-image",
     ]
-    # paragraph mode is default in your script; no flag needed.
-    # embed is default too; no flag needed.
-
-    # Optional: captions-only first pass (faster/cheaper):
     if args.no_local:
         cmd.append("--no-local")
 
-    # Environment for WP creds (so your script can read them if flags are omitted)
+    # Environment for WP creds + YT cookies
     env = os.environ.copy()
     env["WP_URL"] = args.wp_url
     env["WP_USER"] = args.wp_user
     env["WP_APP_PASS"] = args.wp_pass
+    # Forward cookies to get_transcript.py if present
+    if os.getenv("YT_COOKIES_FILE"):
+        env["YT_COOKIES_FILE"] = os.getenv("YT_COOKIES_FILE")
 
     print(f"[run] {url}")
     try:
@@ -130,7 +148,12 @@ def run_one(url: str, args, progress) -> bool:
             return True
         else:
             print(f"[err] {url}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
-            progress["failed"][url] = {"status": f"rc={p.returncode}", "stdout": p.stdout[-2000:], "stderr": p.stderr[-2000:], "when": time.time()}
+            progress["failed"][url] = {
+                "status": f"rc={p.returncode}",
+                "stdout": p.stdout[-2000:],
+                "stderr": p.stderr[-2000:],
+                "when": time.time()
+            }
             save_progress(progress)
             return False
     except subprocess.TimeoutExpired:
@@ -139,8 +162,11 @@ def run_one(url: str, args, progress) -> bool:
         save_progress(progress)
         return False
 
+# ---------- main ----------
 def main():
-    ap = argparse.ArgumentParser(description="Batch publish all videos from a channel to WordPress using get_transcript.py")
+    ap = argparse.ArgumentParser(
+        description="Batch publish all videos from a channel to WordPress using get_transcript.py"
+    )
     ap.add_argument("channel_url", help="YouTube channel or playlist URL (e.g., https://www.youtube.com/@handle/videos)")
     ap.add_argument("--max", type=int, default=None, help="Limit number of videos (for testing)")
     ap.add_argument("--sleep", type=float, default=5.0, help="Seconds to sleep between videos (default: 5)")
@@ -168,7 +194,7 @@ def main():
 
     print(f"Found {len(urls)} videos")
 
-    # Resume support: skip URLs already marked 'ok' or 'skipped-duplicate'
+    # Resume: skip URLs already marked 'ok' or 'skipped-duplicate'
     for u in urls:
         if u in progress["done"]:
             continue
@@ -176,8 +202,10 @@ def main():
         time.sleep(args.sleep)
 
     print("Batch finished.")
-    print(f"Success: {len([1 for v in progress['done'].values() if v['status'].startswith(('ok','skipped'))])} | "
-          f"Failed: {len(progress['failed'])}")
+    print(
+        f"Success: {len([1 for v in progress['done'].values() if str(v['status']).startswith(('ok','skipped'))])} | "
+        f"Failed: {len(progress['failed'])}"
+    )
 
 if __name__ == "__main__":
     main()
