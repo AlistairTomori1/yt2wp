@@ -46,7 +46,7 @@ jobs:
           python -m pip install -U pip wheel
           python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
 
-      - name: Publish newest videos (full pipeline: screenshots + Whisper fallback)
+      - name: "Publish newest videos (full pipeline: screenshots + Whisper fallback)"
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
