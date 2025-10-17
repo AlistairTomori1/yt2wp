@@ -51,6 +51,12 @@ jobs:
           printf "%s" "$YT_COOKIES" > cookies.txt
         env:
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
+      - name: Write YouTube cookies to file
+        run: |
+          echo "$YT_COOKIES_B64" | base64 -d > cookies.txt
+          echo "cookies_sha256=$(sha256sum cookies.txt | cut -d' ' -f1)"
+        env:
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
           
       - name: "Publish newest videos (full pipeline: screenshots + Whisper fallback)"
         env:
