@@ -34,7 +34,7 @@ def _yt_base_opts(skip_download=True):
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
     else:
-        # local fallback (works on your Mac runs)
+       
         browser = os.getenv("YT_COOKIES_BROWSER")
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
@@ -68,12 +68,12 @@ def parse_vtt(vtt_text: str) -> List[dict]:
     segments = []
     time_pat = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?\.\d{3})\s-->\s(\d{1,2}:\d{2}(?::\d{2})?\.\d{3})")
 
-    # skip header lines (e.g., 'WEBVTT')
+  
     while i < n and (not lines[i].strip() or lines[i].startswith("WEBVTT")):
         i += 1
 
     while i < n:
-        # optional cue id
+
         if lines[i].strip() and not time_pat.match(lines[i]):
             i += 1
             continue
@@ -330,7 +330,7 @@ def segments_to_paragraphs(segs: List[dict], target_len: int = 800) -> List[str]
         return []
     blob = " ".join(texts)
     blob = re.sub(r"\s+", " ", blob).strip()
-    # Split on sentence boundaries, then pack into paragraphs
+
     sentences = re.split(r"(?<=[\.!?])\s+", blob)
     paras: List[str] = []
     cur = ""
@@ -360,7 +360,7 @@ def md_to_html(md_text: str) -> str:
         for line in md_text.splitlines():
             stripped = line.lstrip()
             if stripped.startswith("<"):
-                # Keep raw HTML (e.g., <figure>, <img>, <a>) as-is
+       
                 html_lines.append(line)
                 continue
             if line.startswith("## "):
@@ -1142,9 +1142,6 @@ def main():
             body = render_segments_text(segments, with_timestamps=args.timestamps)
         output_md = body
 
-    # Prepend a video embed at the very top (default on; can be disabled via --no-embed)
-    # Prepend a video embed at the very top (default on; can be disabled via --no-embed)
-# Immediately below it, include the referral link (first URL in description) and the affiliate notice.
     try:
         affiliate_html = build_affiliate_block(description)
     except Exception:
