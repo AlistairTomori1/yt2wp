@@ -446,37 +446,34 @@ def ensure_ffmpeg_available() -> None:
 def download_video_mp4_720(url: str, outdir: str) -> str:
     """
     Download a ~720p MP4 when possible. If YouTube blocks direct download (SABR/PO token),
-    fall back to returning an HLS (m3u8) URL that ffmpeg can read frames from remotely.
+    fall back to an HLS (m3u8) URL that ffmpeg can read frames from remotely.
     Returns a local filepath OR a remote URL suitable for ffmpeg -i.
     """
     outtmpl = os.path.join(outdir, "%(id)s.%(ext)s")
 
-    preferred_clients = "android,web_safari,web_embedded,default"
-
     opts = {
         "quiet": True,
         "noprogress": True,
-        # Prefer 720p AVC + M4A; else best <=720. (AVC is easier for ffmpeg screenshots)
         "format": (
             "bv*[height<=720][vcodec~='^(avc1|h264)']+ba[acodec~='^(mp4a|m4a|aac)']/"
             "b[height<=720]"
         ),
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
-        # Avoid SABR/PO-tokened “web” formats when possible
-        "extractor_args": {"youtube": {"player_client": [preferred_clients]}},
-        # Be gentle with retries
+        "extractor_args": {"youtube": {"player_client": ["android", "web_safari", "web_embedded", "default"]}},
         "retries": 10,
         "fragment_retries": 10,
         "concurrent_fragment_downloads": 1,
     }
-cookies_file = os.getenv("YT_COOKIES_FILE")
-if cookies_file and os.path.exists(cookies_file):
-    opts["cookiefile"] = cookies_file
-else:
-    browser = os.getenv("YT_COOKIES_BROWSER")
-    if browser in ("safari", "chrome", "firefox", "edge"):
-        opts["cookiesfrombrowser"] = (browser, None, None, None)
+
+    # Cookies (file in CI, or browser locally)
+    cookies_file = os.getenv("YT_COOKIES_FILE")
+    if cookies_file and os.path.exists(cookies_file):
+        opts["cookiefile"] = cookies_file
+    else:
+        browser = os.getenv("YT_COOKIES_BROWSER")
+        if browser in ("safari", "chrome", "firefox", "edge"):
+            opts["cookiesfrombrowser"] = (browser, None, None, None)
 
     # Try to download a local MP4 first
     try:
@@ -489,22 +486,24 @@ else:
             return mp4_path if os.path.exists(mp4_path) else filepath
         return filepath
     except Exception:
-        # Fallback: get an HLS stream URL and let ffmpeg read frames directly from it
+        # Fallback: fetch an HLS stream URL (<=720p) and let ffmpeg grab frames remotely
         try:
             opts2 = dict(opts)
             opts2["skip_download"] = True
             with YoutubeDL(opts2) as ydl:
                 info = ydl.extract_info(url, download=False)
             fmts = info.get("formats") or []
-            # Choose an m3u8 format <=720p (prefer AVC if available)
-            hls = [f for f in fmts if (f.get("protocol") or "").startswith("m3u8")
-                   and (f.get("height") or 0) <= 720]
+            hls = [
+                f for f in fmts
+                if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720
+            ]
+            # Prefer higher resolution; then prefer AVC streams
             hls.sort(key=lambda f: (-(f.get("height") or 0), 'avc1' not in (f.get("vcodec") or "")))
             if hls and hls[0].get("url"):
                 return hls[0]["url"]
         except Exception:
             pass
-        # If everything fails, bubble up so caller can decide to skip screenshots
+        # Bubble up so caller can decide to skip screenshots
         raise
 
 def extract_frame_to_jpg(video_path: str, ts_seconds: float, out_path: str, width: int = 1280, qscale: int = 3) -> bool:
