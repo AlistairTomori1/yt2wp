@@ -497,15 +497,15 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
                 f for f in fmts
                 if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720
             ]
-            # Prefer higher resolution; then prefer AVC streams
+            # Prefer AVC streams if present
             hls.sort(key=lambda f: (-(f.get("height") or 0), 'avc1' not in (f.get("vcodec") or "")))
             if hls and hls[0].get("url"):
                 return hls[0]["url"]
         except Exception:
             pass
-        # Bubble up so caller can decide to skip screenshots
+        # Bubble up to caller so screenshots can be skipped gracefully
         raise
-
+        
 def extract_frame_to_jpg(video_path: str, ts_seconds: float, out_path: str, width: int = 1280, qscale: int = 3) -> bool:
     """
     Use ffmpeg to extract a single frame at ts_seconds to out_path (JPEG).
