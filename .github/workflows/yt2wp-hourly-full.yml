@@ -57,6 +57,28 @@ jobs:
           echo "cookies_sha256=$(sha256sum cookies.txt | cut -d' ' -f1)"
         env:
           YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+
+      - name: Decode cookies.txt (if provided)
+        if: ${{ secrets.COOKIES_B64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.COOKIES_B64 }}" | base64 -d > "$RUNNER_TEMP/cookies.txt"
+          chmod 644 "$RUNNER_TEMP/cookies.txt"
+          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> $GITHUB_ENV
+
+      - name: Verify WordPress credentials
+        shell: bash
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+        run: |
+          set -e
+          echo "Checking /users/me…"
+          code=$(curl -s -o /tmp/me.json -w "%{http_code}" -u "$WP_USER:$WP_APP_PASS" "$WP_URL/wp-json/wp/v2/users/me")
+          echo "HTTP $code"
+          cat /tmp/me.json
+          test "$code" = "200"
           
       - name: "Publish newest videos (full pipeline: screenshots + Whisper fallback)"
         env:
