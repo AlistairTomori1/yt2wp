@@ -74,7 +74,7 @@ jobs:
           cat /tmp/me.json
           test "$code" = "200"
 
-      - name: Publish newest videos (full pipeline: screenshots + Whisper fallback)
+      - name: Publish newest videos
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
