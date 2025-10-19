@@ -22,22 +22,34 @@ from youtube_transcript_api import (
 # ---------- small helpers ----------
 
 def _yt_base_opts(skip_download=True):
+    """
+    Build a sane default options dict for yt-dlp with cookies support.
+    - If cookies file is provided, avoid 'android' client (it doesn't support cookies).
+    - Otherwise, include android in the rotation to dodge SABR/PO-token experiments.
+    """
     opts = {
         "quiet": True,
         "noprogress": True,
         "skip_download": skip_download,
-        # stick to stable clients to avoid SABR/PO experiments
-        "extractor_args": {"youtube": {"player_client": ["android,web_safari,web_embedded,default"]}},
         "retries": 10,
     }
+
     cookies_file = os.getenv("YT_COOKIES_FILE")
+    browser = os.getenv("YT_COOKIES_BROWSER")
+
     if cookies_file and os.path.exists(cookies_file):
+        # Using exported cookies.txt
         opts["cookiefile"] = cookies_file
+        clients = ["web", "web_embedded", "web_safari", "default"]  # no 'android' when cookies in use
     else:
-       
-        browser = os.getenv("YT_COOKIES_BROWSER")
+        # Try cookies from local browser (only works on your Mac, not in GitHub Actions)
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
+        # Broader mix when no cookies: include android
+        clients = ["android", "web", "web_embedded", "web_safari", "default"]
+
+    opts.setdefault("extractor_args", {})
+    opts["extractor_args"]["youtube"] = {"player_client": clients}
     return opts
 
 def hhmmss(seconds: float) -> str:
@@ -1107,8 +1119,11 @@ def main():
                                 uploaded_ids.append(attach_id)
                             except Exception as e:
                                 print(f"Warning: upload failed for {fname}: {e}", file=sys.stderr)
-                                img_url = f"file://{local_path}"
-                                image_map[int(ch['start'])] = {"id": None, "url": img_url}
+                                if args.post:
+                                    continue
+                                else:
+                                    img_url = f"file://{local_path}"
+                                    image_map[int(ch['start'])] = {"id": None, "url": img_url}
                     else:
                         img_url = f"file://{local_path}"
                         image_map[int(ch["start"])] = {"id": None, "url": img_url}
