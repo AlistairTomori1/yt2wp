@@ -472,7 +472,7 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         ),
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
-        "extractor_args": {"youtube": {"player_client": ["android", "web_safari", "web_embedded", "default"]}},
+        "extractor_args": {"youtube": {"player_client": ["web_safari"]}},
         "retries": 10,
         "fragment_retries": 10,
         "concurrent_fragment_downloads": 1,
