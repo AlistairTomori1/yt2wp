@@ -7,7 +7,7 @@ import requests
 
 PROGRESS_FILE = "batch_progress.json"
 
-# ---------- yt-dlp base options (cookies + stable clients) ----------
+# ---------- yt-dlp base options (cookies + stable clients) ---------
 def _yt_base_opts(skip_download: bool = True, extract_flat: bool = False) -> dict:
     """
     Shared yt-dlp options: quiet, cookies, stable clients, retries.
