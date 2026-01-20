@@ -9,26 +9,24 @@ PROGRESS_FILE = "batch_progress.json"
 
 # ---------- yt-dlp base options (cookies + stable clients) ---------
 def _yt_base_opts(skip_download: bool = True, extract_flat: bool = False) -> dict:
-    """
-    Shared yt-dlp options: quiet, cookies, stable clients, retries.
-    If extract_flat=True, don't fully resolve each playlist item (faster for channel listings).
-    """
-    opts: Dict[str, Any] = {
+    opts = {
         "quiet": True,
         "noprogress": True,
         "skip_download": skip_download,
         "retries": 10,
-        "extractor_args": {"youtube": {"player_client": ["android,web_safari,web_embedded,default"]}},
+        # Enable EJS with Node + auto-fetch scripts from GitHub
+        "js_runtimes": ["node"],
+        "remotecomponents": ["ejs:github"],
+        # DO NOT force player_client; let yt-dlp choose
+        # "extractor_args": {"youtube": {"player_client": ["android,web_safari,web_embedded,default"]}},
     }
     if extract_flat:
-        # Faster listing for channels/playlists; yields 'entries' with URL/ID
         opts["extract_flat"] = "in_playlist"
 
     cookies_file = os.getenv("YT_COOKIES_FILE")
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
     else:
-        # Local convenience (Mac): use a logged-in browser’s cookies if set
         browser = os.getenv("YT_COOKIES_BROWSER")
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
