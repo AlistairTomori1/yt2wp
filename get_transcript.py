@@ -23,6 +23,13 @@ from youtube_transcript_api import (
 # yt-dlp options (with cookies)
 # -------------------------------
 
+def _with_cookies(opts: dict) -> dict:
+    """Attach cookies.txt from env if present."""
+    cf = os.getenv("YT_COOKIES_FILE")
+    if cf and os.path.exists(cf):
+        opts = dict(opts)
+        opts["cookiefile"] = cf
+    return opts
 # add this helper (right after imports)
 def yt_opts(**extra):
     """
@@ -127,7 +134,7 @@ def parse_vtt(vtt_text: str) -> List[dict]:
 
 # fetch_video_id_and_title
 def fetch_video_id_and_title(url: str) -> Tuple[str, str, str]:
-    with YoutubeDL(yt_opts(skip_download=True)) as ydl:
+    with YoutubeDL(_with_cookies({"quiet": True, "noprogress": True, "skip_download": True})) as ydl:
         info = ydl.extract_info(url, download=False)
     return info["id"], info.get("title", ""), info.get("description", "") or ""
 
@@ -213,8 +220,8 @@ def _parse_json3(text: str) -> Optional[List[dict]]:
     return segs
 
 def try_ytdlp_captions(url: str, preferred_langs: List[str]) -> Optional[List[dict]]:
-    opts = _yt_base_opts(skip_download=True)
-    with YoutubeDL(opts) as ydl:
+    opts = {"quiet": True, "noprogress": True, "skip_download": True}
+    with YoutubeDL(_with_cookies(opts)) as ydl:
         info = ydl.extract_info(url, download=False)
 
     track = _choose_caption_track(info.get("subtitles") or {}, preferred_langs)
@@ -493,7 +500,7 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         "concurrent_fragment_downloads": 1,
     }
     try:
-        with YoutubeDL(opts) as ydl:
+        with YoutubeDL(_with_cookies(opts)) as ydl:
             info = ydl.extract_info(url, download=True)
             filepath = ydl.prepare_filename(info)
         base, ext = os.path.splitext(filepath)
@@ -505,7 +512,7 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         # Fallback: get an HLS stream URL (<=720p)
         try:
             opts2 = _yt_base_opts(skip_download=True)
-            with YoutubeDL(opts2) as ydl:
+                with YoutubeDL(_with_cookies(opts2)) as ydl:
                 info = ydl.extract_info(url, download=False)
             fmts = info.get("formats") or []
             hls = [f for f in fmts if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720]
