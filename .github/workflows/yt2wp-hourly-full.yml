@@ -42,9 +42,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
+      - name: Setup Node for yt-dlp EJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install Python deps
         run: |
           python -m pip install -U pip wheel
+          python -m pip install -U "git+https://github.com/yt-dlp/yt-dlp.git#egg=yt-dlp"
           python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
 
       # Optional cookies (base64). We gate on env, not secrets, to avoid the "Unrecognized named-value" error.
@@ -74,14 +80,16 @@ jobs:
       - name: Catch syntax errors early
         run: python -m py_compile get_transcript.py batch_publish.py
 
-      - name: Publish newest videos (full pipeline - screenshots + Whisper fallback)
+      - name: "Publish newest videos (full pipeline - screenshots + Whisper fallback)"
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
-          # YT_COOKIES_FILE is set earlier if cookies existed
+          YT_COOKIES_FILE: ${{ env.YT_COOKIES_FILE }}
+          YT_DLP_JS_ENGINE: node
         run: |
+          python -m py_compile get_transcript.py batch_publish.py
           python batch_publish.py "$CHANNEL_URL" \
             --max 1 \
             --wp-status publish \
