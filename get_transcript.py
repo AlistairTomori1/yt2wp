@@ -21,35 +21,39 @@ from youtube_transcript_api import (
 
 # ---------- small helpers ----------
 
-def _yt_base_opts(skip_download=True):
+def _yt_base_opts(skip_download: bool = True, extract_flat: bool = False) -> dict:
     """
-    Build a sane default options dict for yt-dlp with cookies support.
-    - If cookies file is provided, avoid 'android' client (it doesn't support cookies).
-    - Otherwise, include android in the rotation to dodge SABR/PO-token experiments.
+    Shared yt-dlp options: quiet, cookies, stable clients, retries, Node EJS.
     """
     opts = {
         "quiet": True,
         "noprogress": True,
         "skip_download": skip_download,
         "retries": 10,
+
+        # 1) CORRECT: js_runtimes must be a dict of {runtime: {config}}
+        "js_runtimes": {"node": {}},
+
+        # 2) CORRECT: player_client must be a list of clients, not one string
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web_safari", "web_embedded", "default"]
+            }
+        },
     }
 
-    cookies_file = os.getenv("YT_COOKIES_FILE")
-    browser = os.getenv("YT_COOKIES_BROWSER")
+    if extract_flat:
+        opts["extract_flat"] = "in_playlist"
 
+    # Cookies (either a file or pull from a logged-in browser)
+    cookies_file = os.getenv("YT_COOKIES_FILE")
     if cookies_file and os.path.exists(cookies_file):
-        # Using exported cookies.txt
         opts["cookiefile"] = cookies_file
-        clients = ["web", "web_embedded", "web_safari", "default"]  # no 'android' when cookies in use
     else:
-        # Try cookies from local browser (only works on your Mac, not in GitHub Actions)
+        browser = os.getenv("YT_COOKIES_BROWSER")
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
-        # Broader mix when no cookies: include android
-        clients = ["android", "web", "web_embedded", "web_safari", "default"]
 
-    opts.setdefault("extractor_args", {})
-    opts["extractor_args"]["youtube"] = {"player_client": clients}
     return opts
 
 def hhmmss(seconds: float) -> str:
