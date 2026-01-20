@@ -23,6 +23,23 @@ from youtube_transcript_api import (
 # yt-dlp options (with cookies)
 # -------------------------------
 
+# add this helper (right after imports)
+def yt_opts(**extra):
+    """
+    Base YoutubeDL options with optional cookies file and sane defaults.
+    Pass extra opts as kwargs to override/extend.
+    """
+    o = {"quiet": True, "noprogress": True}
+    cookies = os.getenv("YT_COOKIES_FILE")
+    if cookies and os.path.exists(cookies):
+        o["cookiefile"] = cookies
+    # Prefer clients that currently play well with screenshots; yt-dlp will still pick best
+    # (Keep your extractor_args if you already had them)
+    if "extractor_args" not in extra:
+        extra["extractor_args"] = {"youtube": {"player_client": ["web_embedded,web_safari,default"]}}
+    o.update(extra)
+    return o
+
 def _yt_base_opts(skip_download=True):
     opts = {
         "quiet": True,
@@ -108,11 +125,11 @@ def parse_vtt(vtt_text: str) -> List[dict]:
 # YouTube info + captions
 # -------------------------------
 
+# fetch_video_id_and_title
 def fetch_video_id_and_title(url: str) -> Tuple[str, str, str]:
-    opts = _yt_base_opts(skip_download=True)
-    with YoutubeDL(opts) as ydl:
+    with YoutubeDL(yt_opts(skip_download=True)) as ydl:
         info = ydl.extract_info(url, download=False)
-    return info["id"], info.get("title", "") or "", info.get("description", "") or ""
+    return info["id"], info.get("title", ""), info.get("description", "") or ""
 
 def try_official_transcript(video_id: str, preferred_langs: List[str]) -> Optional[List[dict]]:
     list_fn = getattr(YouTubeTranscriptApi, "list_transcripts", None)
