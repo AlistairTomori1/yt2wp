@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-import os
-import sys
-import json
-import time
-import argparse
-import subprocess
-import re
+import os, sys, json, time, argparse, subprocess, re
 from typing import List, Dict, Any, Optional
-
 from yt_dlp import YoutubeDL
 import requests
 
 PROGRESS_FILE = "batch_progress.json"
 
-# -------------------------------
-# Helpers
-# -------------------------------
-
-# put near the top (after imports)
-def _yt_base_opts(**extra):
-    o = {"quiet": True, "noprogress": True}
-    cookies = os.getenv("YT_COOKIES_FILE")
-    if cookies and os.path.exists(cookies):
-        o["cookiefile"] = cookies
-    # keep extractor_args if you like; not strictly required here
-    o.update(extra)
-    return o
+def _yt_base_opts(*, skip_download: bool = False, extract_flat: bool = False) -> dict:
+    """
+    Base yt-dlp options everywhere in this script.
+    Automatically injects cookies if YT_COOKIES_FILE is present.
+    """
+    opts: Dict[str, Any] = {
+        "quiet": True,
+        "noprogress": True,
+    }
+    if skip_download:
+        opts["skip_download"] = True
+    if extract_flat:
+        # True is fine for channel/playlist listing
+        opts["extract_flat"] = True
+    cf = os.getenv("YT_COOKIES_FILE")
+    if cf and os.path.exists(cf):
+        opts["cookiefile"] = cf
+    return opts
 
 def simple_slugify(text: str) -> str:
     text = text.strip().lower()
@@ -36,27 +33,18 @@ def simple_slugify(text: str) -> str:
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text or "post"
 
-def _yt_base_opts(skip_download: bool = True) -> Dict:
-    cookies_file = os.getenv("YT_COOKIES_FILE")
-    use_android = not (cookies_file and os.path.exists(cookies_file))
-    client_list = ["web", "web_embedded", "web_safari"]
-    if use_android:
-        client_list = ["android", "web_embedded", "web_safari", "web"]
-    opts = {
-        "quiet": True,
-        "noprogress": True,
-        "skip_download": skip_download,
-        "retries": 10,
-    }
-    if cookies_file and os.path.exists(cookies_file):
-        opts["cookiefile"] = cookies_file
-    return opts
-
 def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> List[str]:
+    """
+    Returns a list of canonical video URLs from a channel or playlist page.
+    Works with:
+      - https://www.youtube.com/@handle/videos
+      - https://www.youtube.com/channel/UCxxxx/videos
+      - Uploads playlists, normal playlists, etc.
+    """
     with YoutubeDL(_yt_base_opts(skip_download=True, extract_flat=True)) as ydl:
         info = ydl.extract_info(channel_url, download=False)
     entries = info.get("entries") or []
-    urls = []
+    urls: List[str] = []
     for e in entries:
         u = e.get("webpage_url") or e.get("url") or e.get("id")
         if not u:
@@ -67,8 +55,6 @@ def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> 
         if max_results and len(urls) >= max_results:
             break
     return urls
-
-
 
 def load_progress() -> Dict[str, Any]:
     if os.path.exists(PROGRESS_FILE):
@@ -125,9 +111,10 @@ def run_one(url: str, args, progress) -> bool:
     env["WP_URL"] = args.wp_url
     env["WP_USER"] = args.wp_user
     env["WP_APP_PASS"] = args.wp_pass
-    # pass cookies file through env (used by get_transcript)
-    if os.getenv("YT_COOKIES_FILE"):
-        env["YT_COOKIES_FILE"] = os.getenv("YT_COOKIES_FILE")
+    # Pass cookies to child script (get_transcript.py reads YT_COOKIES_FILE)
+    cf = os.getenv("YT_COOKIES_FILE")
+    if cf:
+        env["YT_COOKIES_FILE"] = cf
 
     print(f"[run] {url}")
     try:
@@ -138,7 +125,7 @@ def run_one(url: str, args, progress) -> bool:
             save_progress(progress)
             return True
         else:
-            print(f"[err] {url}\nSTDOUT:\n{p.stdout}\n\nSTDERR:\n{p.stderr}")
+            print(f"[err] {url}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
             progress["failed"][url] = {
                 "status": f"rc={p.returncode}",
                 "stdout": p.stdout[-2000:],
@@ -153,24 +140,18 @@ def run_one(url: str, args, progress) -> bool:
         save_progress(progress)
         return False
 
-# -------------------------------
-# Main
-# -------------------------------
-
 def main():
-    ap = argparse.ArgumentParser(description="Batch publish videos from a channel/playlist to WordPress using get_transcript.py")
-    ap.add_argument("channel_url", help="Channel or playlist URL (e.g., https://www.youtube.com/@handle/videos)")
+    ap = argparse.ArgumentParser(description="Batch publish all videos from a channel to WordPress using get_transcript.py")
+    ap.add_argument("channel_url", help="YouTube channel or playlist URL (e.g., https://www.youtube.com/@handle/videos)")
     ap.add_argument("--max", type=int, default=None, help="Limit number of videos (for testing)")
-    ap.add_argument("--sleep", type=float, default=5.0, help="Seconds to sleep between videos")
-    ap.add_argument("--timeout", type=int, default=3600, help="Per-video timeout (seconds)")
-
+    ap.add_argument("--sleep", type=float, default=5.0, help="Seconds to sleep between videos (default: 5)")
+    ap.add_argument("--timeout", type=int, default=3600, help="Per-video timeout in seconds (default: 3600)")
     ap.add_argument("--wp-url", default=os.getenv("WP_URL", ""), help="WP base URL")
     ap.add_argument("--wp-user", default=os.getenv("WP_USER", ""), help="WP username")
     ap.add_argument("--wp-pass", default=os.getenv("WP_APP_PASS", os.getenv("WP_PASS", "")), help="WP application password")
-    ap.add_argument("--wp-status", default="draft", choices=["draft","publish","private","pending"])
-
-    ap.add_argument("--no-local", action="store_true", help="Captions only (skip local Whisper)")
-    ap.add_argument("--skip-duplicates", action="store_true", help="Skip if a post with the same slug exists")
+    ap.add_argument("--wp-status", default="draft", choices=["draft","publish","private","pending"], help="Post status (default: draft)")
+    ap.add_argument("--no-local", action="store_true", help="Skip local Whisper fallback (captions-only). Good for first pass.")
+    ap.add_argument("--skip-duplicates", action="store_true", help="Skip if a post with the same slug already exists on WP")
     ap.add_argument("--screenshot-width", type=int, default=1280)
     ap.add_argument("--screenshot-offset", type=float, default=0.5)
     ap.add_argument("--image-quality", type=int, default=3)
@@ -194,8 +175,8 @@ def main():
         time.sleep(args.sleep)
 
     print("Batch finished.")
-    ok_count = sum(1 for v in progress["done"].values() if v["status"].startswith(("ok","skipped")))
-    print(f"Success: {ok_count} | Failed: {len(progress['failed'])}")
+    print(f"Success: {len([1 for v in progress['done'].values() if v['status'].startswith(('ok','skipped'))])} | "
+          f"Failed: {len(progress['failed'])}")
 
 if __name__ == "__main__":
     main()
