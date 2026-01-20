@@ -482,55 +482,104 @@ def ensure_ffmpeg_available() -> None:
 
 def download_video_mp4_720(url: str, outdir: str) -> str:
     """
-    Try to download a 720p MP4. If YouTube blocks direct download, return an HLS URL
-    for ffmpeg to read frames remotely.
+    Try progressive MP4 (itag 18, then 22) first for reliable frame grabs.
+    Fall back to <=720p merged MP4, then finally HLS m3u8 URL for ffmpeg.
+    Returns a local file path when possible; otherwise an HLS URL.
     """
     outtmpl = os.path.join(outdir, "%(id)s.%(ext)s")
-    opts = _yt_base_opts(skip_download=False)
-    opts = {
-        "quiet": True,
-        "noprogress": True,
-        # prefer <=720p, then any best fallback
-        "format": "bv*[height<=720]+ba/b[height<=720]/best",
-        "merge_output_format": "mp4",
-        "outtmpl": outtmpl,
-        # do NOT force player_client; let yt-dlp pick
-        "retries": 10,
-        "fragment_retries": 10,
+
+    def _try(opts: dict, want_file: bool = True) -> Optional[str]:
+        try:
+            with YoutubeDL(_with_cookies(opts)) as ydl:
+                info = ydl.extract_info(url, download=want_file)
+                if want_file:
+                    fp = ydl.prepare_filename(info)
+                    base, ext = os.path.splitext(fp)
+                    # If yt-dlp emitted MKV/WebM but merge_output_format=mp4 failed, still accept whatever exists
+                    if ext.lower() != ".mp4":
+                        mp4 = base + ".mp4"
+                        return mp4 if os.path.exists(mp4) else fp
+                    return fp
+                else:
+                    return info
+        except Exception:
+            return None
+
+    # 1) Prefer progressive MP4 360p (18) or 720p (22)
+    opts18 = {
+        "quiet": True, "noprogress": True,
+        "format": "18/best[ext=mp4]",  # itag 18 is very common
+        "outtmpl": outtmpl, "retries": 10, "fragment_retries": 10,
         "concurrent_fragment_downloads": 1,
     }
-    try:
-        with YoutubeDL(_with_cookies(opts)) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filepath = ydl.prepare_filename(info)
-        base, ext = os.path.splitext(filepath)
-        if ext.lower() != ".mp4":
-            mp4_path = base + ".mp4"
-            return mp4_path if os.path.exists(mp4_path) else filepath
-        return filepath
-    except Exception:
-        # Fallback: get an HLS stream URL (<=720p)
-        try:
-            opts2 = _yt_base_opts(skip_download=True)
-            with YoutubeDL(_with_cookies(opts2)) as ydl:
-                info = ydl.extract_info(url, download=False)
-            fmts = info.get("formats") or []
-            hls = [f for f in fmts if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720]
-            hls.sort(key=lambda f: (-(f.get("height") or 0), 'avc1' not in (f.get("vcodec") or "")))
-            if hls and hls[0].get("url"):
-                return hls[0]["url"]
-        except Exception:
-            pass
-        raise
+    fp = _try(opts18, want_file=True)
+    if fp and os.path.exists(fp):
+        return fp
+
+    opts22 = {
+        "quiet": True, "noprogress": True,
+        "format": "22/18/best[ext=mp4]",  # 22 if available, else 18
+        "outtmpl": outtmpl, "retries": 10, "fragment_retries": 10,
+        "concurrent_fragment_downloads": 1,
+    }
+    fp = _try(opts22, want_file=True)
+    if fp and os.path.exists(fp):
+        return fp
+
+    # 2) Try any <=720p (merged MP4)
+    opts_mp4 = {
+        "quiet": True, "noprogress": True,
+        "format": "bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/best[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": outtmpl, "retries": 10, "fragment_retries": 10,
+        "concurrent_fragment_downloads": 1,
+    }
+    fp = _try(opts_mp4, want_file=True)
+    if fp and os.path.exists(fp):
+        return fp
+
+    # 3) Final fallback: return an HLS URL (<=720p) for ffmpeg to read
+    #    (we’ll use a safer seek method for remote inputs)
+    info = _try({"quiet": True, "noprogress": True, "skip_download": True}, want_file=False)
+    if isinstance(info, dict):
+        fmts = info.get("formats") or []
+        hls = [f for f in fmts if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720]
+        hls.sort(key=lambda f: (-(f.get("height") or 0), "avc1" not in (f.get("vcodec") or "")))
+        if hls and hls[0].get("url"):
+            return hls[0]["url"]
+
+    raise RuntimeError("Could not obtain a playable video stream for screenshots.")
 
 def extract_frame_to_jpg(video_path: str, ts_seconds: float, out_path: str, width: int = 1280, qscale: int = 3) -> bool:
+    """
+    Use fast seek for local files (-ss before -i), but for remote HLS/HTTPS,
+    place -ss *after* -i which is slower but more reliable.
+    """
     ts = seconds_to_ffmpeg_ts(ts_seconds)
     vf = f"scale={int(width)}:-1"
-    cmd = ["ffmpeg", "-ss", ts, "-i", video_path, "-frames:v", "1", "-vf", vf, "-q:v", str(int(qscale)), "-y", out_path]
+    is_remote = video_path.startswith("http://") or video_path.startswith("https://") or video_path.startswith("m3u8:")
+
+    if is_remote:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_path, "-ss", ts,
+            "-frames:v", "1", "-vf", vf, "-q:v", str(int(qscale)),
+            "-y", out_path
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", ts, "-i", video_path,
+            "-frames:v", "1", "-vf", vf, "-q:v", str(int(qscale)),
+            "-y", out_path
+        ]
+
     try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
         return os.path.exists(out_path)
-    except Exception:
+    except subprocess.CalledProcessError as e:
+        # Surface one line per failure in logs
+        sys.stderr.write(f"ffmpeg frame grab failed at {ts} ({'remote' if is_remote else 'local'}): {e.stderr.decode(errors='ignore')[:300]}\n")
         return False
 
 # -------------------------------
@@ -934,6 +983,11 @@ def main():
                 temp_video_dir.cleanup()
             except Exception:
                 pass
+
+    # After the for idx, ch in enumerate(chapters): loop
+    made = sum(1 for v in image_map.values() if (v.get('url') or '').startswith(('http://','https://')))
+    miss = len(chapters) - made
+    print(f"[screenshots] chapters={len(chapters)} uploaded={made} missing={miss}")
 
     # Build body
     if groups:
