@@ -31,11 +31,7 @@ def _yt_base_opts(skip_download=True):
         "retries": 10,
     }
     # Prefer stable clients but pass them correctly as a list
-    opts["extractor_args"] = {
-        "youtube": {
-            "player_client": ["android", "web_safari", "web_embedded", "default"]
-        }
-    }
+
     cookies_file = os.getenv("YT_COOKIES_FILE")
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
