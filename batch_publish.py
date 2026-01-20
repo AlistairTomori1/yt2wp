@@ -37,7 +37,6 @@ def _yt_base_opts(skip_download: bool = True) -> Dict:
         "noprogress": True,
         "skip_download": skip_download,
         "retries": 10,
-        "extractor_args": {"youtube": {"player_client": client_list}},
     }
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
