@@ -23,29 +23,23 @@ from youtube_transcript_api import (
 # yt-dlp options (with cookies)
 # -------------------------------
 
-def _yt_base_opts(skip_download: bool = True) -> Dict:
-    """
-    Base yt-dlp options. If cookies are present, avoid 'android' client
-    (yt-dlp cannot use cookies with android). Otherwise, include it to dodge some SABR/PO experiments.
-    """
-    cookies_file = os.getenv("YT_COOKIES_FILE")
-    use_android = not (cookies_file and os.path.exists(cookies_file))
-
-    client_list = ["web", "web_embedded", "web_safari"]
-    if use_android:
-        client_list = ["android", "web_embedded", "web_safari", "web"]
-
+def _yt_base_opts(skip_download=True):
     opts = {
         "quiet": True,
         "noprogress": True,
         "skip_download": skip_download,
         "retries": 10,
-        
     }
+    # Prefer stable clients but pass them correctly as a list
+    opts["extractor_args"] = {
+        "youtube": {
+            "player_client": ["android", "web_safari", "web_embedded", "default"]
+        }
+    }
+    cookies_file = os.getenv("YT_COOKIES_FILE")
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
     else:
-        # local convenience - will be ignored on GitHub Actions
         browser = os.getenv("YT_COOKIES_BROWSER")
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
