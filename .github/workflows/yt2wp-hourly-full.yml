@@ -2,7 +2,7 @@ name: yt2wp-hourly-full
 
 on:
   schedule:
-    - cron: '17 * * * *'   # hourly at :17 UTC
+    - cron: '17 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -22,7 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Deno is the recommended/auto-enabled EJS runtime
       - uses: denoland/setup-deno@v1
         with:
           deno-version: "2.x"
@@ -55,7 +54,6 @@ jobs:
       - name: Install Python deps (EJS-enabled yt-dlp)
         run: |
           python -m pip install -U pip wheel
-          # IMPORTANT: [default] includes the EJS solver distribution
           python -m pip install -U "yt-dlp[default]" youtube_transcript_api faster-whisper requests markdown
           python - <<'PY'
           import pkgutil, yt_dlp
@@ -63,17 +61,21 @@ jobs:
           print("ejs present:", pkgutil.find_loader("yt_dlp_ejs") is not None)
           PY
 
-      - name: Write YouTube cookies to file
-        if: ${{ secrets.YT_COOKIES_B64 != '' }}
+      - name: Write YouTube cookies to file (optional)
         shell: bash
         env:
           YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
         run: |
           set -euo pipefail
-          echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
-          chmod 600 "$RUNNER_TEMP/cookies.txt"
-          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
-          echo "cookies sha256: $(sha256sum "$RUNNER_TEMP/cookies.txt" | cut -d' ' -f1)"
+          if [ -n "${YT_COOKIES_B64:-}" ]; then
+            echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
+            chmod 600 "$RUNNER_TEMP/cookies.txt"
+            echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
+            echo "cookies sha256: $(sha256sum "$RUNNER_TEMP/cookies.txt" | cut -d' ' -f1)"
+            grep -c 'youtube\.com' "$RUNNER_TEMP/cookies.txt" || true
+          else
+            echo "No YT_COOKIES_B64 secret provided; proceeding without cookies."
+          fi
 
       - name: Verify WordPress credentials
         env:
@@ -89,7 +91,6 @@ jobs:
       - name: Catch syntax errors early
         run: python -m py_compile get_transcript.py batch_publish.py
 
-      # optional: quick sanity check the first video + formats WITH cookies
       - name: Debug formats
         shell: bash
         run: |
@@ -101,7 +102,10 @@ jobs:
           print("Using cookies:", ck)
           with YoutubeDL({'quiet': True, 'cookiefile': ck, 'extract_flat': True}) as y1:
               ie = y1.extract_info(ch, download=False)
-              first = (ie.get('entries') or [])[0]
+              entries = ie.get('entries') or []
+              if not entries:
+                  raise SystemExit("No entries on channel")
+              first = entries[0]
               url = first.get('webpage_url') or first.get('url')
               print("First video:", url)
           with YoutubeDL({'listformats': True, 'cookiefile': ck}) as y2:
