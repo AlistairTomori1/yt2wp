@@ -2,7 +2,7 @@ name: yt2wp-hourly-full
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17 * * * *'   # hourly at :17 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -16,11 +16,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      # NEW: Node runtime for yt-dlp EJS
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
 
       - uses: actions/setup-python@v5
         with:
@@ -50,25 +45,20 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install -U pip wheel
-          # EITHER latest stable with EJS bundle:
-          python -m pip install -U "yt-dlp[default]" youtube_transcript_api faster-whisper requests markdown
-          # OR keep bleeding edge (works too, since you enabled EJS in code):
-          # python -m pip install -U "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp@master" youtube_transcript_api faster-whisper requests markdown
+          python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
 
-      - name: Decode YouTube cookies (optional)
-        shell: bash
+      # Optional cookies (base64). We gate on env, not secrets, to avoid the "Unrecognized named-value" error.
+      - name: Setup YouTube cookies (optional)
+        if: ${{ env.YT_COOKIES_B64 != '' }}
+        env:
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
         run: |
-          if [ -n "${{ secrets.YT_COOKIES_B64 }}" ]; then
-            echo "${{ secrets.YT_COOKIES_B64 }}" | base64 -d > "$RUNNER_TEMP/cookies.txt"
-            chmod 600 "$RUNNER_TEMP/cookies.txt"
-            echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> $GITHUB_ENV
-            echo "cookies_sha256=$(sha256sum "$RUNNER_TEMP/cookies.txt" | cut -d' ' -f1)"
-          else
-            echo "No YT_COOKIES_B64 secret set; proceeding without cookies."
-          fi
+          echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
+          chmod 644 "$RUNNER_TEMP/cookies.txt"
+          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> $GITHUB_ENV
+          echo "cookies_sha256=$(sha256sum "$RUNNER_TEMP/cookies.txt" | cut -d' ' -f1)"
 
       - name: Verify WordPress credentials
-        shell: bash
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
@@ -81,20 +71,19 @@ jobs:
           cat /tmp/me.json
           test "$code" = "200"
 
-      - name: Publish newest videos
+      - name: Catch syntax errors early
+        run: python -m py_compile get_transcript.py batch_publish.py
+
+      - name: Publish newest videos (full pipeline: screenshots + Whisper fallback)
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
           CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+          # YT_COOKIES_FILE is set earlier if cookies existed
         run: |
-          # catch syntax errors early
-          python -m py_compile get_transcript.py batch_publish.py
-
-          # Recommend starting with --no-local to avoid pulling Whisper models on runners
           python batch_publish.py "$CHANNEL_URL" \
             --max 1 \
             --wp-status publish \
             --skip-duplicates \
-            --no-local \
             --sleep 6
