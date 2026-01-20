@@ -80,6 +80,20 @@ jobs:
       - name: Catch syntax errors early
         run: python -m py_compile get_transcript.py batch_publish.py
 
+      - name: Debug formats (temporary)
+        run: |
+          python - <<'PY'
+          from yt_dlp import YoutubeDL
+          url = "${{ secrets.CHANNEL_URL }}"
+          with YoutubeDL({'quiet': True}) as ydl:
+          # get first video on the channel
+          ie = ydl.extract_info(url, download=False)
+          vid = (ie.get('entries') or [])[0]
+          video_url = vid.get('webpage_url') or vid.get('url')
+          with YoutubeDL({'listformats': True}) as y2:
+          y2.extract_info(video_url, download=False)
+          PY
+
       - name: "Publish newest videos (full pipeline - screenshots + Whisper fallback)"
         env:
           WP_URL: ${{ secrets.WP_URL }}
