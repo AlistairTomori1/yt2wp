@@ -74,7 +74,7 @@ jobs:
       - name: Catch syntax errors early
         run: python -m py_compile get_transcript.py batch_publish.py
 
-      - name: Publish newest videos (full pipeline: screenshots + Whisper fallback)
+      - name: Publish newest videos (full pipeline - screenshots + Whisper fallback)
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USER: ${{ secrets.WP_USER }}
