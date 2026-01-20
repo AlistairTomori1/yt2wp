@@ -55,11 +55,17 @@ jobs:
 
       
       # Optional cookies (base64). We gate on env, not secrets, to avoid the "Unrecognized named-value" error.
-      - name: Write YouTube cookies to file (base64 secret)
+      - name: Write YouTube cookies to file
+        shell: bash
         run: |
+          set -euo pipefail
           echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
-          chmod 644 "$RUNNER_TEMP/cookies.txt"
-          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> $GITHUB_ENV
+          chmod 600 "$RUNNER_TEMP/cookies.txt"
+          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
+          # quick sanity checks (won't leak contents)
+          file "$RUNNER_TEMP/cookies.txt" || true
+          head -1 "$RUNNER_TEMP/cookies.txt" || true
+          grep -c 'youtube\.com' "$RUNNER_TEMP/cookies.txt" || true
         env:
           YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
     
@@ -81,18 +87,33 @@ jobs:
         run: python -m py_compile get_transcript.py batch_publish.py
 
       - name: Debug formats (temporary)
+        shell: bash
         run: |
           python - <<'PY'
+          import os
           from yt_dlp import YoutubeDL
-          url = "${{ secrets.CHANNEL_URL }}"
-          with YoutubeDL({'quiet': True}) as ydl:
-            # get first video on the channel
-            ie = ydl.extract_info(url, download=False)
-            vid = (ie.get('entries') or [])[0]
-            video_url = vid.get('webpage_url') or vid.get('url')
-            with YoutubeDL({'listformats': True}) as y2:
+
+          channel = os.environ["CHANNEL_URL"]
+          cookies = os.environ.get("YT_COOKIES_FILE")
+
+          print("Using cookies file:", cookies)
+
+          # list channel, get first video URL
+          with YoutubeDL({'quiet': True, 'cookiefile': cookies}) as y1:
+              ie = y1.extract_info(channel, download=False)
+              entries = ie.get('entries') or []
+              if not entries:
+                  raise SystemExit("No entries on channel")
+              first = entries[0]
+              video_url = first.get('webpage_url') or first.get('url')
+              print("First video:", video_url)
+
+          # list formats for the first video
+          with YoutubeDL({'listformats': True, 'cookiefile': cookies}) as y2:
               y2.extract_info(video_url, download=False)
           PY
+            env:
+              CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
 
       - name: "Publish newest videos (full pipeline - screenshots + Whisper fallback)"
         env:
