@@ -19,6 +19,16 @@ PROGRESS_FILE = "batch_progress.json"
 # Helpers
 # -------------------------------
 
+# put near the top (after imports)
+def _yt_base_opts(**extra):
+    o = {"quiet": True, "noprogress": True}
+    cookies = os.getenv("YT_COOKIES_FILE")
+    if cookies and os.path.exists(cookies):
+        o["cookiefile"] = cookies
+    # keep extractor_args if you like; not strictly required here
+    o.update(extra)
+    return o
+
 def simple_slugify(text: str) -> str:
     text = text.strip().lower()
     text = re.sub(r"['’]", "", text)
@@ -43,29 +53,22 @@ def _yt_base_opts(skip_download: bool = True) -> Dict:
     return opts
 
 def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> List[str]:
-    """
-    Returns canonical video URLs from channel/playlist.
-    Works with:
-      - https://www.youtube.com/@handle/videos
-      - https://www.youtube.com/channel/UCxxxx/videos
-      - Uploads playlists and normal playlists.
-    """
-    opts = _yt_base_opts(skip_download=True)
-    opts.update({"extract_flat": True})
-    with YoutubeDL(opts) as ydl:
+    with YoutubeDL(_yt_base_opts(skip_download=True, extract_flat=True)) as ydl:
         info = ydl.extract_info(channel_url, download=False)
     entries = info.get("entries") or []
-    urls: List[str] = []
+    urls = []
     for e in entries:
         u = e.get("webpage_url") or e.get("url") or e.get("id")
         if not u:
             continue
-        if not str(u).startswith("http"):
+        if not u.startswith("http"):
             u = f"https://www.youtube.com/watch?v={u}"
         urls.append(u)
         if max_results and len(urls) >= max_results:
             break
     return urls
+
+
 
 def load_progress() -> Dict[str, Any]:
     if os.path.exists(PROGRESS_FILE):
