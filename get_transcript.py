@@ -512,7 +512,7 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         # Fallback: get an HLS stream URL (<=720p)
         try:
             opts2 = _yt_base_opts(skip_download=True)
-                with YoutubeDL(_with_cookies(opts2)) as ydl:
+            with YoutubeDL(_with_cookies(opts2)) as ydl:
                 info = ydl.extract_info(url, download=False)
             fmts = info.get("formats") or []
             hls = [f for f in fmts if (f.get("protocol") or "").startswith("m3u8") and (f.get("height") or 0) <= 720]
