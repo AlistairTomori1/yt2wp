@@ -40,7 +40,7 @@ def _yt_base_opts(skip_download: bool = True) -> Dict:
         "noprogress": True,
         "skip_download": skip_download,
         "retries": 10,
-        "extractor_args": {"youtube": {"player_client": client_list}},
+        
     }
     if cookies_file and os.path.exists(cookies_file):
         opts["cookiefile"] = cookies_file
@@ -473,16 +473,18 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
     """
     outtmpl = os.path.join(outdir, "%(id)s.%(ext)s")
     opts = _yt_base_opts(skip_download=False)
-    opts.update({
-        "format": (
-            "bv*[height<=720][vcodec~='^(avc1|h264)']+ba[acodec~='^(mp4a|m4a|aac)']/"
-            "b[height<=720]"
-        ),
+    opts = {
+        "quiet": True,
+        "noprogress": True,
+        # prefer <=720p, then any best fallback
+        "format": "bv*[height<=720]+ba/b[height<=720]/best",
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
+        # do NOT force player_client; let yt-dlp pick
+        "retries": 10,
         "fragment_retries": 10,
         "concurrent_fragment_downloads": 1,
-    })
+    }
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
