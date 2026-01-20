@@ -2,7 +2,7 @@ name: yt2wp-hourly-full
 
 on:
   schedule:
-    - cron: '17 * * * *'   # hourly at :17 UTC
+    - cron: '17 * * * *'  # hourly at :17 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -14,15 +14,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
+    # Make secrets available to every step
+    env:
+      WP_URL: ${{ secrets.WP_URL }}
+      WP_USER: ${{ secrets.WP_USER }}
+      WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+      CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+      # Enable yt-dlp's JS-based challenge solver
+      YT_DLP_JS_ENGINE: node
+
     steps:
       - uses: actions/checkout@v4
-      # JS runtime for the EJS challenge solver
-      - uses: denoland/setup-deno@v1
+
+      # Ensure Node is present for yt-dlp EJS
+      - uses: actions/setup-node@v4
         with:
-          deno-version: "2.x"
+          node-version: '20'
+
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -45,36 +56,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Install Python deps (EJS-enabled yt-dlp)
+      - name: Install Python deps
         run: |
           python -m pip install -U pip wheel
-          python -m pip install -U "yt-dlp[default]" youtube_transcript_api faster-whisper requests markdown
-      # (yt-dlp[default] bundles the yt-dlp-ejs helper)
+          python -m pip install -U yt-dlp youtube_transcript_api faster-whisper requests markdown
 
-      # keep your cookie + WP steps as you have them
-
-      
-      # Optional cookies (base64). We gate on env, not secrets, to avoid the "Unrecognized named-value" error.
-      - name: Write YouTube cookies to file
+      # Decode Base64 cookies into a file and export YT_COOKIES_FILE for the rest of the job
+      - name: Decode cookies (optional)
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
-          chmod 600 "$RUNNER_TEMP/cookies.txt"
-          echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
-          # quick sanity checks (won't leak contents)
-          file "$RUNNER_TEMP/cookies.txt" || true
-          head -1 "$RUNNER_TEMP/cookies.txt" || true
-          grep -c 'youtube\.com' "$RUNNER_TEMP/cookies.txt" || true
         env:
           YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
-    
+        run: |
+          set -euo pipefail
+          if [ -n "${YT_COOKIES_B64:-}" ]; then
+            echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
+            chmod 600 "$RUNNER_TEMP/cookies.txt"
+            echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
+            echo "Cookies decoded to $RUNNER_TEMP/cookies.txt"
+          else
+            echo "YT_COOKIES_B64 secret not set; proceeding without a cookies file."
+          fi
+
+      - name: Check required env
+        run: |
+          set -e
+          test -n "$CHANNEL_URL" || { echo "CHANNEL_URL missing"; exit 1; }
+          test -n "$WP_URL" || { echo "WP_URL missing"; exit 1; }
+          test -n "$WP_USER" || { echo "WP_USER missing"; exit 1; }
+          test -n "$WP_APP_PASS" || { echo "WP_APP_PASS missing"; exit 1; }
+          if [ -n "${YT_COOKIES_FILE:-}" ]; then
+            test -f "$YT_COOKIES_FILE" || { echo "cookies file not found at $YT_COOKIES_FILE"; exit 1; }
+          fi
 
       - name: Verify WordPress credentials
-        env:
-          WP_URL: ${{ secrets.WP_URL }}
-          WP_USER: ${{ secrets.WP_USER }}
-          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
         run: |
           set -e
           echo "Checking /users/me…"
@@ -86,20 +100,18 @@ jobs:
       - name: Catch syntax errors early
         run: python -m py_compile get_transcript.py batch_publish.py
 
+      # Temporary: list formats for the newest video to confirm cookies + EJS are working
       - name: Debug formats (temporary)
+        continue-on-error: true
         shell: bash
         run: |
           python - <<'PY'
           import os
           from yt_dlp import YoutubeDL
-
           channel = os.environ["CHANNEL_URL"]
           cookies = os.environ.get("YT_COOKIES_FILE")
-
           print("Using cookies file:", cookies)
-
-          # list channel, get first video URL
-          with YoutubeDL({'quiet': True, 'cookiefile': cookies}) as y1:
+          with YoutubeDL({'quiet': True, 'cookiefile': cookies} if cookies else {'quiet': True}) as y1:
               ie = y1.extract_info(channel, download=False)
               entries = ie.get('entries') or []
               if not entries:
@@ -107,22 +119,14 @@ jobs:
               first = entries[0]
               video_url = first.get('webpage_url') or first.get('url')
               print("First video:", video_url)
-
-          # list formats for the first video
-          with YoutubeDL({'listformats': True, 'cookiefile': cookies}) as y2:
+          with YoutubeDL({'listformats': True, 'cookiefile': cookies} if cookies else {'listformats': True}) as y2:
               y2.extract_info(video_url, download=False)
           PY
-            env:
-              CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
 
-      - name: "Publish newest videos (full pipeline - screenshots + Whisper fallback)"
+      - name: Publish newest videos (full pipeline - screenshots + Whisper fallback)
         env:
-          WP_URL: ${{ secrets.WP_URL }}
-          WP_USER: ${{ secrets.WP_USER }}
-          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-          CHANNEL_URL: ${{ secrets.CHANNEL_URL }}
+          # Pass through the cookies path if it exists
           YT_COOKIES_FILE: ${{ env.YT_COOKIES_FILE }}
-          YT_DLP_JS_ENGINE: node
         run: |
           python -m py_compile get_transcript.py batch_publish.py
           python batch_publish.py "$CHANNEL_URL" \
