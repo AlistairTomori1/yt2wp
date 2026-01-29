@@ -62,37 +62,42 @@ jobs:
           PY
 
 
-      - name: Write YouTube cookies to file (raw or base64; safe fallback)
+      - name: Write YouTube cookies to file (raw or base64; with validation)
         shell: bash
         env:
-          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}   # optional: base64-encoded cookies.txt
-          YT_COOKIES:     ${{ secrets.YT_COOKIES }}       # optional: raw cookies.txt (Netscape format)
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}   # optional
+          YT_COOKIES:     ${{ secrets.YT_COOKIES }}       # optional
         run: |
           set -euo pipefail
           outfile="$RUNNER_TEMP/cookies.txt"
 
           if [ -n "${YT_COOKIES_B64:-}" ]; then
-            # Try to decode as base64; if that fails, treat it as raw cookies.
             if ! printf "%s" "$YT_COOKIES_B64" | base64 -d > "$outfile" 2>/dev/null; then
-              echo "YT_COOKIES_B64 did not decode; writing secret as raw cookies instead."
+              echo "YT_COOKIES_B64 not valid base64; writing as raw."
               printf "%s" "$YT_COOKIES_B64" > "$outfile"
             fi
           elif [ -n "${YT_COOKIES:-}" ]; then
-            # Raw cookies secret path
             printf "%s" "$YT_COOKIES" > "$outfile"
           else
-            echo "No cookies secret provided; continuing without cookies."
+            echo "::warning::No cookies secret provided; continuing unauthenticated."
             exit 0
           fi
 
           chmod 600 "$outfile"
           echo "YT_COOKIES_FILE=$outfile" >> "$GITHUB_ENV"
 
-          # Non-sensitive sanity checks (won’t print cookie contents)
           echo "cookies sha256: $(sha256sum "$outfile" | cut -d' ' -f1)"
           echo "cookies bytes:  $(wc -c < "$outfile")"
-          # Do not fail if youtube.com isn't present, just report count
-          grep -c 'youtube\.com' "$outfile" || true
+
+          # Soft validation: require at least one of PSID/SAPISID and one APISID family cookie
+          if ! grep -E -q '\t(__Secure-3PSID|__Secure-1PSID|SAPISID)\t' "$outfile"; then
+            echo "::error::Missing PSID/SAPISID cookie (google.com or youtube.com). Re-export cookies for ALL DOMAINS."
+            exit 1
+          fi
+          if ! grep -E -q '\t(__Secure-3PAPISID|APISID)\t' "$outfile"; then
+            echo "::error::Missing APISID cookie. Re-export cookies for ALL DOMAINS."
+            exit 1
+          fi
 
       - name: Verify WordPress credentials
         env:
