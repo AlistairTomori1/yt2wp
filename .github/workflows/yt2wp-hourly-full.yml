@@ -61,21 +61,38 @@ jobs:
           print("ejs present:", pkgutil.find_loader("yt_dlp_ejs") is not None)
           PY
 
-      - name: Write YouTube cookies to file (optional)
+
+      - name: Write YouTube cookies to file (raw or base64; safe fallback)
         shell: bash
         env:
-          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}   # optional: base64-encoded cookies.txt
+          YT_COOKIES:     ${{ secrets.YT_COOKIES }}       # optional: raw cookies.txt (Netscape format)
         run: |
           set -euo pipefail
+          outfile="$RUNNER_TEMP/cookies.txt"
+
           if [ -n "${YT_COOKIES_B64:-}" ]; then
-            echo "$YT_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/cookies.txt"
-            chmod 600 "$RUNNER_TEMP/cookies.txt"
-            echo "YT_COOKIES_FILE=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
-            echo "cookies sha256: $(sha256sum "$RUNNER_TEMP/cookies.txt" | cut -d' ' -f1)"
-            grep -c 'youtube\.com' "$RUNNER_TEMP/cookies.txt" || true
+            # Try to decode as base64; if that fails, treat it as raw cookies.
+            if ! printf "%s" "$YT_COOKIES_B64" | base64 -d > "$outfile" 2>/dev/null; then
+              echo "YT_COOKIES_B64 did not decode; writing secret as raw cookies instead."
+              printf "%s" "$YT_COOKIES_B64" > "$outfile"
+            fi
+          elif [ -n "${YT_COOKIES:-}" ]; then
+            # Raw cookies secret path
+            printf "%s" "$YT_COOKIES" > "$outfile"
           else
-            echo "No YT_COOKIES_B64 secret provided; proceeding without cookies."
+            echo "No cookies secret provided; continuing without cookies."
+            exit 0
           fi
+
+          chmod 600 "$outfile"
+          echo "YT_COOKIES_FILE=$outfile" >> "$GITHUB_ENV"
+
+          # Non-sensitive sanity checks (won’t print cookie contents)
+          echo "cookies sha256: $(sha256sum "$outfile" | cut -d' ' -f1)"
+          echo "cookies bytes:  $(wc -c < "$outfile")"
+          # Do not fail if youtube.com isn't present, just report count
+          grep -c 'youtube\.com' "$outfile" || true
 
       - name: Verify WordPress credentials
         env:
