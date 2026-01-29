@@ -62,40 +62,42 @@ jobs:
           PY
 
 
-      - name: Write YouTube cookies to file (raw or base64; with validation)
+      - name: Write YouTube cookies to file (raw or base64; tolerant validator)
         shell: bash
         env:
-          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}   # optional
-          YT_COOKIES:     ${{ secrets.YT_COOKIES }}       # optional
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+          YT_COOKIES:     ${{ secrets.YT_COOKIES }}
         run: |
           set -euo pipefail
-          outfile="$RUNNER_TEMP/cookies.txt"
+          out="$RUNNER_TEMP/cookies.txt"
 
           if [ -n "${YT_COOKIES_B64:-}" ]; then
-            if ! printf "%s" "$YT_COOKIES_B64" | base64 -d > "$outfile" 2>/dev/null; then
+            if ! printf "%s" "$YT_COOKIES_B64" | base64 -d > "$out" 2>/dev/null; then
               echo "YT_COOKIES_B64 not valid base64; writing as raw."
-              printf "%s" "$YT_COOKIES_B64" > "$outfile"
+              printf "%s" "$YT_COOKIES_B64" > "$out"
             fi
           elif [ -n "${YT_COOKIES:-}" ]; then
-            printf "%s" "$YT_COOKIES" > "$outfile"
+            printf "%s" "$YT_COOKIES" > "$out"
           else
-            echo "::warning::No cookies secret provided; continuing unauthenticated."
-            exit 0
-          fi
-
-          chmod 600 "$outfile"
-          echo "YT_COOKIES_FILE=$outfile" >> "$GITHUB_ENV"
-
-          echo "cookies sha256: $(sha256sum "$outfile" | cut -d' ' -f1)"
-          echo "cookies bytes:  $(wc -c < "$outfile")"
-
-          # Soft validation: require at least one of PSID/SAPISID and one APISID family cookie
-          if ! grep -E -q '\t(__Secure-3PSID|__Secure-1PSID|SAPISID)\t' "$outfile"; then
-            echo "::error::Missing PSID/SAPISID cookie (google.com or youtube.com). Re-export cookies for ALL DOMAINS."
+            echo "::error::No cookies secret provided. Set YT_COOKIES (raw) or YT_COOKIES_B64 (base64)."
             exit 1
           fi
-          if ! grep -E -q '\t(__Secure-3PAPISID|APISID)\t' "$outfile"; then
-            echo "::error::Missing APISID cookie. Re-export cookies for ALL DOMAINS."
+
+          # Normalize CRLF just in case
+          sed -i 's/\r$//' "$out"
+
+          chmod 600 "$out"
+          echo "YT_COOKIES_FILE=$out" >> "$GITHUB_ENV"
+          echo "cookies sha256: $(sha256sum "$out" | cut -d' ' -f1)"
+          echo "cookies bytes:  $(wc -c < "$out")"
+
+          # Tolerant checks: allow tabs OR spaces, check the 6th Netscape column (cookie name)
+          if ! awk '($6=="__Secure-3PSID"||$6=="SAPISID"){found=1} END{exit !found}' "$out"; then
+            echo "::error::Missing PSID/SAPISID cookie; re-export for ALL DOMAINS (google.com & youtube.com)."
+            exit 1
+          fi
+          if ! awk '($6=="__Secure-3PAPISID"||$6=="APISID"){found=1} END{exit !found}' "$out"; then
+            echo "::error::Missing APISID cookie; re-export for ALL DOMAINS (google.com & youtube.com)."
             exit 1
           fi
 
