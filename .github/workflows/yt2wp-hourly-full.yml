@@ -2,7 +2,7 @@ name: yt2wp-hourly-full
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17 07 * * *'
   workflow_dispatch: {}
 
 concurrency:
