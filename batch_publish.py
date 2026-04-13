@@ -142,7 +142,8 @@ def run_one(url: str, args, progress) -> bool:
 
 def main():
     ap = argparse.ArgumentParser(description="Batch publish all videos from a channel to WordPress using get_transcript.py")
-    ap.add_argument("channel_url", help="YouTube channel or playlist URL (e.g., https://www.youtube.com/@handle/videos)")
+    ap.add_argument("channel_url", nargs="?", help="YouTube channel/playlist URL OR leave empty for manual mode")
+    ap.add_argument("--video", help="Single YouTube video URL (manual mode)")
     ap.add_argument("--max", type=int, default=None, help="Limit number of videos (for testing)")
     ap.add_argument("--sleep", type=float, default=5.0, help="Seconds to sleep between videos (default: 5)")
     ap.add_argument("--timeout", type=int, default=3600, help="Per-video timeout in seconds (default: 3600)")
@@ -161,10 +162,21 @@ def main():
         ap.error("WP_URL, WP_USER, and WP_APP_PASS must be provided (flags or env).")
 
     progress = load_progress()
-    urls = list_channel_videos(args.channel_url, max_results=args.max)
-    if not urls:
-        print("No videos found. Double-check the channel/playlist URL (use the /videos page).")
-        sys.exit(2)
+    # --- Manual mode ---
+    if args.video:
+        urls = [args.video]
+        print(f"Manual mode: processing 1 video")
+    else:
+        if not args.channel_url:
+            print("Error: provide either a channel_url OR --video")
+            sys.exit(1)
+
+        urls = list_channel_videos(args.channel_url, max_results=args.max)
+        if not urls:
+            print("No videos found. Double-check the channel/playlist URL.")
+            sys.exit(2)
+
+    print(f"Found {len(urls)} videos")
 
     print(f"Found {len(urls)} videos")
 
