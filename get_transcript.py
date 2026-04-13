@@ -19,6 +19,11 @@ from youtube_transcript_api import (
     CouldNotRetrieveTranscript,
 )
 
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
+print("Starting get_transcript.py...", flush=True)
+
 # -------------------------------
 # yt-dlp options (with cookies)
 # -------------------------------
@@ -136,6 +141,7 @@ def parse_vtt(vtt_text: str) -> List[dict]:
 def fetch_video_id_and_title(url: str) -> Tuple[str, str, str]:
     with YoutubeDL(_with_cookies({"quiet": True, "noprogress": True, "skip_download": True})) as ydl:
         info = ydl.extract_info(url, download=False)
+        print("Fetched video info", flush=True)
     return info["id"], info.get("title", ""), info.get("description", "") or ""
 
 def try_official_transcript(video_id: str, preferred_langs: List[str]) -> Optional[List[dict]]:
@@ -558,7 +564,7 @@ def extract_frame_to_jpg(video_path: str, ts_seconds: float, out_path: str, widt
     ts = seconds_to_ffmpeg_ts(ts_seconds)
     vf = f"scale={int(width)}:-1"
     is_remote = video_path.startswith("http://") or video_path.startswith("https://") or video_path.startswith("m3u8:")
-
+    print("Starting screenshot processing...", flush=True)
     if is_remote:
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
