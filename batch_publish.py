@@ -118,8 +118,9 @@ def run_one(url: str, args, progress) -> bool:
 
     print(f"[run] {url}")
     try:
-        p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=args.timeout)
+        p = subprocess.run(cmd, env=env, text=True, timeout=args.timeout)
         if p.returncode == 0:
+            print(f"[ok]  {url}", flush=True)
             print(f"[ok]  {url}")
             progress["done"][url] = {"status": "ok", "when": time.time()}
             save_progress(progress)
