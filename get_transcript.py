@@ -12,14 +12,8 @@ from typing import List, Tuple, Optional, Dict
 
 import requests
 from yt_dlp import YoutubeDL
-from youtube_transcript_api import (
-    YouTubeTranscriptApi,
-    TranscriptsDisabled,
-    NoTranscriptFound,
-    CouldNotRetrieveTranscript,
-)
+from youtube_transcript_api import YouTubeTranscriptApi
 
-import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 print("Starting get_transcript.py...", flush=True)
@@ -27,48 +21,29 @@ print("Starting get_transcript.py...", flush=True)
 # -------------------------------
 # yt-dlp options (with cookies)
 # -------------------------------
+# Every YoutubeDL(...) call in this file must go through _with_cookies()
+# (directly or via _yt_base_opts). A call without it gets blocked by
+# YouTube's bot check on GitHub runners.
 
 def _with_cookies(opts: dict) -> dict:
-    """Attach cookies.txt from env if present."""
+    """Return a copy of opts with cookies attached (file first, then browser)."""
+    opts = dict(opts)
     cf = os.getenv("YT_COOKIES_FILE")
     if cf and os.path.exists(cf):
-        opts = dict(opts)
         opts["cookiefile"] = cf
-    return opts
-# add this helper (right after imports)
-def yt_opts(**extra):
-    """
-    Base YoutubeDL options with optional cookies file and sane defaults.
-    Pass extra opts as kwargs to override/extend.
-    """
-    o = {"quiet": True, "noprogress": True}
-    cookies = os.getenv("YT_COOKIES_FILE")
-    if cookies and os.path.exists(cookies):
-        o["cookiefile"] = cookies
-    # Prefer clients that currently play well with screenshots; yt-dlp will still pick best
-    # (Keep your extractor_args if you already had them)
-    if "extractor_args" not in extra:
-        extra["extractor_args"] = {"youtube": {"player_client": ["web_embedded,web_safari,default"]}}
-    o.update(extra)
-    return o
-
-def _yt_base_opts(skip_download=True):
-    opts = {
-        "quiet": True,
-        "noprogress": True,
-        "skip_download": skip_download,
-        "retries": 10,
-    }
-    # Prefer stable clients but pass them correctly as a list
-
-    cookies_file = os.getenv("YT_COOKIES_FILE")
-    if cookies_file and os.path.exists(cookies_file):
-        opts["cookiefile"] = cookies_file
     else:
         browser = os.getenv("YT_COOKIES_BROWSER")
         if browser in ("safari", "chrome", "firefox", "edge"):
             opts["cookiesfrombrowser"] = (browser, None, None, None)
     return opts
+
+def _yt_base_opts(skip_download=True) -> dict:
+    return _with_cookies({
+        "quiet": True,
+        "noprogress": True,
+        "skip_download": skip_download,
+        "retries": 10,
+    })
 
 # -------------------------------
 # Small helpers
@@ -137,48 +112,48 @@ def parse_vtt(vtt_text: str) -> List[dict]:
 # YouTube info + captions
 # -------------------------------
 
-# fetch_video_id_and_title
 def fetch_video_id_and_title(url: str) -> Tuple[str, str, str]:
     with YoutubeDL(_with_cookies({"quiet": True, "noprogress": True, "skip_download": True})) as ydl:
         info = ydl.extract_info(url, download=False)
         print("Fetched video info", flush=True)
     return info["id"], info.get("title", ""), info.get("description", "") or ""
 
+def _to_dicts(t):
+    """youtube_transcript_api 1.x returns FetchedTranscript objects; old versions return lists of dicts."""
+    return t.to_raw_data() if hasattr(t, "to_raw_data") else t
+
 def try_official_transcript(video_id: str, preferred_langs: List[str]) -> Optional[List[dict]]:
-    list_fn = getattr(YouTubeTranscriptApi, "list_transcripts", None)
+    # Works with both the old static API and the 1.x instance API
     try:
-        if list_fn is None:
-            try:
-                return YouTubeTranscriptApi.get_transcript(video_id, languages=preferred_langs)
-            except Exception:
-                return YouTubeTranscriptApi.get_transcript(video_id)
-        else:
+        if hasattr(YouTubeTranscriptApi, "list_transcripts"):
             tl = YouTubeTranscriptApi.list_transcripts(video_id)
-
-            for lang in preferred_langs:
-                try:
-                    t = tl.find_manually_created_transcript([lang])
-                    return t.fetch()
-                except Exception:
-                    pass
-
-            for t in tl:
-                if not getattr(t, "is_generated", False):
-                    return t.fetch()
-
-            for lang in preferred_langs:
-                try:
-                    t = tl.find_generated_transcript([lang])
-                    return t.fetch()
-                except Exception:
-                    pass
-
-            for t in tl:
-                if getattr(t, "is_generated", False):
-                    return t.fetch()
-            return None
-    except (TranscriptsDisabled, CouldNotRetrieveTranscript, NoTranscriptFound, Exception):
+        else:
+            tl = YouTubeTranscriptApi().list(video_id)
+    except Exception as e:
+        print(f"[transcript-api] failed: {e}", file=sys.stderr, flush=True)
         return None
+
+    # 1) Manual captions in preferred language, 2) auto captions in preferred language
+    for finder in ("find_manually_created_transcript", "find_generated_transcript"):
+        try:
+            segs = _to_dicts(getattr(tl, finder)(preferred_langs).fetch())
+            if segs:
+                return segs
+        except Exception:
+            pass
+
+    # 3) Any manual track, then any track at all
+    tracks = list(tl)
+    tracks.sort(key=lambda t: getattr(t, "is_generated", False))
+    for t in tracks:
+        try:
+            segs = _to_dicts(t.fetch())
+            if segs:
+                return segs
+        except Exception:
+            pass
+    print("[transcript-api] no usable transcript found", file=sys.stderr, flush=True)
+    return None
 
 def _choose_caption_track(tracks: dict, preferred_langs: List[str]) -> Optional[dict]:
     if not tracks:
@@ -226,20 +201,25 @@ def _parse_json3(text: str) -> Optional[List[dict]]:
     return segs
 
 def try_ytdlp_captions(url: str, preferred_langs: List[str]) -> Optional[List[dict]]:
-    opts = {"quiet": True, "noprogress": True, "skip_download": True}
-    with YoutubeDL(_with_cookies(opts)) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with YoutubeDL(_with_cookies({"quiet": True, "noprogress": True, "skip_download": True})) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"[yt-dlp captions] info failed: {e}", file=sys.stderr, flush=True)
+        return None
 
     track = _choose_caption_track(info.get("subtitles") or {}, preferred_langs)
     if not track:
         track = _choose_caption_track(info.get("automatic_captions") or {}, preferred_langs)
     if not track:
+        print("[yt-dlp captions] no caption tracks found", file=sys.stderr, flush=True)
         return None
 
     try:
         resp = requests.get(track["url"], timeout=15)
         resp.raise_for_status()
-    except Exception:
+    except Exception as e:
+        print(f"[yt-dlp captions] download failed: {e}", file=sys.stderr, flush=True)
         return None
 
     ext = (track.get("ext") or "").lower()
@@ -494,7 +474,7 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
     """
     outtmpl = os.path.join(outdir, "%(id)s.%(ext)s")
 
-    def _try(opts: dict, want_file: bool = True) -> Optional[str]:
+    def _try(opts: dict, want_file: bool = True):
         try:
             with YoutubeDL(_with_cookies(opts)) as ydl:
                 info = ydl.extract_info(url, download=want_file)
@@ -508,7 +488,8 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
                     return fp
                 else:
                     return info
-        except Exception:
+        except Exception as e:
+            print(f"[video] attempt failed ({opts.get('format', 'info')}): {e}", file=sys.stderr, flush=True)
             return None
 
     # 1) Prefer progressive MP4 360p (18) or 720p (22)
@@ -545,7 +526,6 @@ def download_video_mp4_720(url: str, outdir: str) -> str:
         return fp
 
     # 3) Final fallback: return an HLS URL (<=720p) for ffmpeg to read
-    #    (we’ll use a safer seek method for remote inputs)
     info = _try({"quiet": True, "noprogress": True, "skip_download": True}, want_file=False)
     if isinstance(info, dict):
         fmts = info.get("formats") or []
@@ -818,7 +798,8 @@ def download_audio(url: str, outdir: str) -> str:
         "outtmpl": outtmpl,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "192"}],
     }
-    with YoutubeDL(opts) as ydl:
+    # FIX: this call was missing cookies, which caused the bot-check failure
+    with YoutubeDL(_with_cookies(opts)) as ydl:
         info = ydl.extract_info(url, download=True)
         audio_path = ydl.prepare_filename(info)
         base = os.path.splitext(audio_path)[0]
@@ -840,6 +821,12 @@ def transcribe_locally(audio_path: str, model_size: str = "tiny") -> List[dict]:
 # -------------------------------
 # Main
 # -------------------------------
+
+def _wp_creds(args) -> Tuple[str, str, str]:
+    wp_url = (args.wp_url or os.getenv("WP_URL") or "").strip()
+    wp_user = (args.wp_user or os.getenv("WP_USER") or "").strip()
+    wp_pass = (args.wp_pass or os.getenv("WP_APP_PASS") or os.getenv("WP_PASS") or "").strip()
+    return wp_url, wp_user, wp_pass
 
 def main():
     parser = argparse.ArgumentParser(
@@ -873,6 +860,9 @@ def main():
 
     args = parser.parse_args()
 
+    cf = os.getenv("YT_COOKIES_FILE")
+    print(f"Cookies file: {cf if cf and os.path.exists(cf) else 'NOT FOUND'}", flush=True)
+
     try:
         video_id, title, description = fetch_video_id_and_title(args.url)
     except Exception as e:
@@ -888,13 +878,13 @@ def main():
         source = "official"
 
     # 2) yt-dlp captions
-    if segments is None:
+    if not segments:
         segments = try_ytdlp_captions(args.url, preferred)
         if segments:
             source = "youtube"
 
     # 3) Local Whisper
-    if segments is None and not args.no_local:
+    if not segments and not args.no_local:
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 audio_path = download_audio(args.url, tmp)
@@ -911,6 +901,8 @@ def main():
     if not segments:
         print("No captions/transcript available.", file=sys.stderr)
         sys.exit(4)
+
+    print(f"Transcript source: {source}", flush=True)
 
     chapters = parse_description_timestamps(description)
     if chapters:
@@ -932,9 +924,7 @@ def main():
 
             # If posting, try to upload thumbnail up front (used as intro image and featured if requested)
             if args.post:
-                wp_url = (args.wp_url or os.getenv("WP_URL") or "").strip()
-                wp_user = (args.wp_user or os.getenv("WP_USER") or "").strip()
-                wp_pass = (args.wp_pass or os.getenv("WP_APP_PASS") or os.getenv("WP_PASS") or "").strip()
+                wp_url, wp_user, wp_pass = _wp_creds(args)
                 if wp_url and wp_user and wp_pass:
                     try:
                         yt_thumb_url = fetch_best_thumbnail_url(args.url, video_id)
@@ -960,15 +950,17 @@ def main():
                     continue
 
                 if args.post:
-                    wp_url = (args.wp_url or os.getenv("WP_URL") or "").strip()
-                    wp_user = (args.wp_user or os.getenv("WP_USER") or "").strip()
-                    wp_pass = (args.wp_pass or os.getenv("WP_APP_PASS") or os.getenv("WP_PASS") or "").strip()
+                    wp_url, wp_user, wp_pass = _wp_creds(args)
                     if not (wp_url and wp_user and wp_pass):
                         image_map[key] = {"id": None, "url": f"file://{local_path}"}
                     else:
                         try:
                             attach_id, src_url = upload_media(wp_url, wp_user, wp_pass, local_path, file_name=fname, mime_type="image/jpeg")
-                            caption_html = f'<a href="{args.url}{("&" if "?" in args.url else "?")}t={int(ch["start"])}s">Watch this section</a>' if args.paragraphs else f'<a href="{args.url}{("&" if "?" in args.url else "?")}t={int(ch["start"])}s">Back to {hhmmss(ch["start"])}</a>'
+                            sep = "&" if "?" in args.url else "?"
+                            if args.paragraphs:
+                                caption_html = f'<a href="{args.url}{sep}t={int(ch["start"])}s">Watch this section</a>'
+                            else:
+                                caption_html = f'<a href="{args.url}{sep}t={int(ch["start"])}s">Back to {hhmmss(ch["start"])}</a>'
                             media_title = f"{ch['title']}"
                             alt_text = f"Screenshot — {ch['title']}"
                             update_media_metadata(wp_url, wp_user, wp_pass, attach_id, title=media_title, alt_text=alt_text, caption_html=caption_html)
@@ -980,18 +972,14 @@ def main():
                     image_map[key] = {"id": None, "url": f"file://{local_path}"}
 
             if args.featured_image and args.post:
-                if uploaded_thumb:
-                    featured_media_id = int(uploaded_thumb[0])
-                else:
-                    featured_media_id = None
+                featured_media_id = int(uploaded_thumb[0]) if uploaded_thumb else None
         finally:
             try:
                 temp_video_dir.cleanup()
             except Exception:
                 pass
 
-    # After the for idx, ch in enumerate(chapters): loop
-    made = sum(1 for v in image_map.values() if (v.get('url') or '').startswith(('http://','https://')))
+    made = sum(1 for v in image_map.values() if (v.get('url') or '').startswith(('http://', 'https://')))
     miss = len(chapters) - made
     print(f"[screenshots] chapters={len(chapters)} uploaded={made} missing={miss}")
 
@@ -1027,9 +1015,7 @@ def main():
 
     # If posting, ensure featured image is set (prefer thumbnail)
     if args.post and args.featured_image:
-        wp_url = (args.wp_url or os.getenv("WP_URL") or "").strip()
-        wp_user = (args.wp_user or os.getenv("WP_USER") or "").strip()
-        wp_pass = (args.wp_pass or os.getenv("WP_APP_PASS") or os.getenv("WP_PASS") or "").strip()
+        wp_url, wp_user, wp_pass = _wp_creds(args)
         if wp_url and wp_user and wp_pass:
             try:
                 if not featured_media_id:
@@ -1042,9 +1028,7 @@ def main():
 
     # Publish
     if args.post:
-        wp_url = (args.wp_url or os.getenv("WP_URL") or "").strip()
-        wp_user = (args.wp_user or os.getenv("WP_USER") or "").strip()
-        wp_pass = (args.wp_pass or os.getenv("WP_APP_PASS") or os.getenv("WP_PASS") or "").strip()
+        wp_url, wp_user, wp_pass = _wp_creds(args)
         if not (wp_url and wp_user and wp_pass):
             print("WordPress posting requested but WP_URL, WP_USER, and WP_APP_PASS/WP_PASS are not fully provided.", file=sys.stderr)
             sys.exit(6)
