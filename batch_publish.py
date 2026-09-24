@@ -59,7 +59,10 @@ def list_channel_videos(channel_url: str, max_results: Optional[int] = None) -> 
 def load_progress() -> Dict[str, Any]:
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+        data.setdefault("done", {})
+        data.setdefault("failed", {})
+        return data
     return {"done": {}, "failed": {}}
 
 def save_progress(data: Dict[str, Any]) -> None:
@@ -93,6 +96,7 @@ def run_one(url: str, args, progress) -> bool:
         if wp_has_post_with_slug(args.wp_url, args.wp_user, args.wp_pass, slug):
             print(f"[skip] slug exists on WP: {slug}  ({url})")
             progress["done"][url] = {"status": "skipped-duplicate", "when": time.time()}
+            progress["failed"].pop(url, None)
             save_progress(progress)
             return True
 
@@ -116,27 +120,29 @@ def run_one(url: str, args, progress) -> bool:
     if cf:
         env["YT_COOKIES_FILE"] = cf
 
-    print(f"[run] {url}")
+    print(f"[run] {url}", flush=True)
     try:
+        # Output is NOT captured, so it streams live into the GitHub Actions log.
+        # That means p.stdout / p.stderr are None - never slice them directly.
         p = subprocess.run(cmd, env=env, text=True, timeout=args.timeout)
         if p.returncode == 0:
             print(f"[ok]  {url}", flush=True)
-            print(f"[ok]  {url}")
             progress["done"][url] = {"status": "ok", "when": time.time()}
+            progress["failed"].pop(url, None)
             save_progress(progress)
             return True
         else:
-            print(f"[err] {url}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
+            print(f"[err] {url} (exit code {p.returncode}) - see get_transcript.py output above", flush=True)
             progress["failed"][url] = {
                 "status": f"rc={p.returncode}",
-                "stdout": p.stdout[-2000:],
-                "stderr": p.stderr[-2000:],
+                "stdout": (p.stdout or "")[-2000:],
+                "stderr": (p.stderr or "")[-2000:],
                 "when": time.time()
             }
             save_progress(progress)
             return False
     except subprocess.TimeoutExpired:
-        print(f"[timeout] {url}")
+        print(f"[timeout] {url}", flush=True)
         progress["failed"][url] = {"status": "timeout", "when": time.time()}
         save_progress(progress)
         return False
@@ -163,10 +169,10 @@ def main():
         ap.error("WP_URL, WP_USER, and WP_APP_PASS must be provided (flags or env).")
 
     progress = load_progress()
-    # --- Manual mode ---
+
     if args.video:
         urls = [args.video]
-        print(f"Manual mode: processing 1 video")
+        print("Manual mode: processing 1 video")
     else:
         if not args.channel_url:
             print("Error: provide either a channel_url OR --video")
@@ -179,17 +185,21 @@ def main():
 
     print(f"Found {len(urls)} videos")
 
-    print(f"Found {len(urls)} videos")
-
+    any_failed = False
     for u in urls:
         if u in progress["done"]:
             continue
-        run_one(u, args, progress)
+        if not run_one(u, args, progress):
+            any_failed = True
         time.sleep(args.sleep)
 
     print("Batch finished.")
-    print(f"Success: {len([1 for v in progress['done'].values() if v['status'].startswith(('ok','skipped'))])} | "
-          f"Failed: {len(progress['failed'])}")
+    ok_count = len([1 for v in progress["done"].values() if v["status"].startswith(("ok", "skipped"))])
+    print(f"Success: {ok_count} | Failed: {len(progress['failed'])}")
+
+    # Make the GitHub Actions run show red when a video fails, instead of crashing or silently passing
+    if any_failed:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
